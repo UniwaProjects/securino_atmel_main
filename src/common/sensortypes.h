@@ -27,4 +27,12 @@ namespace sensortypes
 		sensor_type_t type = type_none;	   //Type of the sensor.
 		sensor_state_t state = state_ping; //The state of the sensor.
 	} SensorMessage;
+
+	//Wrapper for the sensor ack.
+	typedef struct SensorAck
+	{
+		uint32_t parent_device_id = 0;			  //Parent is this device, up to 4billion.
+		uint16_t session_id = 0;				  //Session that its id was given, up to 128k.
+		sensor_type_t sensors_to_arm = type_none; //The sensor types to arm
+	} SensorAck;
 } // namespace sensortypes

@@ -116,9 +116,12 @@ void setup()
 	Serial.println(String(g_data->readRegisteredSensorCount()));
 #endif
 
+	// Use CMD+DEVICE_ID:1131616 to get past this on debug
 	uint32_t device_id = getDeviceId();
+
 	// Get wifi info or connect to wifi, will only continue after an
-	// establised wifi connection
+	// establised wifi connection.
+	// Use CMD+INFO:WIRELESS-N,-55,192.168.1.100 to get past this on debug
 	onBootConnectNetwork();
 
 	// Read EEPROM saved pin
@@ -573,17 +576,22 @@ void changeState()
 			{
 				g_status.method = alarm::method_arm_stay;
 			}
-			// Reset the sensor timer
-			g_sensor_timer.reset();
 		}
 		else
 		{
 			// Else the alarm was armed, so disable it
 			disableAlarm();
 		}
+
 		// Show and send the status change
 		g_display->showAlertCenter(texts::state_change);
 		g_serial->sendStatus(g_status);
+
+		// Reset sensor states
+		g_sensors->resetSensorStates();
+
+		// Reset the sensor timer
+		g_sensor_timer.reset();
 	}
 	else
 	{

@@ -31,17 +31,6 @@ void sensors::SensorManager::init(uint8_t ce_pin, uint8_t csn_pin, uint32_t devi
 	m_session_id = m_data->readSessionId();
 	m_next_sensor_id = m_data->readNextSensorId();
 
-	//Reserves space in the array for registered sensors.
-	//Set type as none for now, type will be updated when the sensor sends a ping.
-	uint8_t saved_sensor_count = m_data->readRegisteredSensorCount();
-	if (saved_sensor_count > 0)
-	{
-		for (int i = 0; i < saved_sensor_count; i++)
-		{
-			registerSensor(i, sensortypes::type_none);
-		}
-	}
-
 	m_radio = new RF24(ce_pin, csn_pin);
 	m_radio->begin();
 	m_radio->setPALevel(RF24_PA_MIN);
@@ -110,7 +99,7 @@ bool sensors::SensorManager::pair()
 		sensortypes::sensor_type_t sensor_type = (sensortypes::sensor_type_t)sensor_type_id;
 		//The message for the sensor.
 		String message = String(m_device_id) + "," + String(m_session_id) + "," + String(m_next_sensor_id);
-		
+
 #ifdef DEBUG
 		Serial.print("Wire received sensor type: ");
 		Serial.println(sensor_type);
@@ -157,7 +146,7 @@ bool sensors::SensorManager::pair()
 
 		//Increment next sensor id.
 		m_next_sensor_id++;
-		
+
 		//0 is reserved for no ID
 		if (m_next_sensor_id == 0)
 		{
@@ -172,15 +161,51 @@ bool sensors::SensorManager::pair()
 	}
 }
 
+// Create an ack with the given status and device info
+sensortypes::SensorAck sensors::SensorManager::createAck(const alarm::Status &status)
+{
+	sensortypes::SensorAck sensorAck;
+	sensorAck.parent_device_id = m_device_id;
+	sensorAck.session_id = m_session_id;
+
+	//Response is 1 for armed 0 for not armed or on alert.
+	if (status.state == alarm::state_armed)
+	{
+		//If the method is arm stay, pir sensors should not work, so send a disarmed response.
+		if (status.method == alarm::method_arm_stay)
+		{
+			sensorAck.sensors_to_arm = sensortypes::sensor_type_t::type_magnet;
+		}
+		else
+		{
+			sensorAck.sensors_to_arm = sensortypes::sensor_type_t::type_pir;
+		}
+	}
+	else
+	{
+		sensorAck.sensors_to_arm = sensortypes::sensor_type_t::type_none;
+	}
+	return sensorAck;
+}
+
 //Listens for sensor messages.
 bool sensors::SensorManager::listen(const alarm::Status &status)
 {
 	uint8_t pipe_number;
+
 	//If no incomming messages, exit.
 	if (!m_radio->available(&pipe_number))
 	{
 		return false;
 	}
+
+	// Prepare the ack
+	sensortypes::SensorAck ack = createAck(status);
+	m_radio->writeAckPayload(pipe_number, &ack, sizeof(sensortypes::SensorAck));
+
+#ifdef DEBUG
+	Serial.println("Ack: " + String(ack.parent_device_id) + ", " + String(ack.session_id) + ", " + String(ack.sensors_to_arm));
+#endif
 
 	//Read message.
 	sensortypes::SensorMessage message;
@@ -189,39 +214,21 @@ bool sensors::SensorManager::listen(const alarm::Status &status)
 #ifdef DEBUG
 	if (message.sensor_id != 0)
 	{
-		Serial.println("Received: " + String(message.parent_device_id) + ", " + String(message.session_id) + ", " + String(message.sensor_id));
+		Serial.println("Received: " + String(message.parent_device_id) + ", " + String(message.session_id) + ", " + String(message.sensor_id) + ", " + String(message.state));
 	}
 #endif
-	//If the sensor does not belong in this device, or has a wrong session number,
-	//or doesn't have an id, respond with 2.
-	if (message.parent_device_id != m_device_id || message.session_id != m_session_id || message.sensor_id == 0)
+
+	// If the session and device id match, update the sensor info.
+	if (message.session_id == m_session_id && message.parent_device_id == m_device_id)
 	{
-		//Send a wrong device response
-		m_radio->writeAckPayload(pipe_number, &response_wrong_device, sizeof(response_wrong_device));
-		return false;
-	}
-	//Response is 1 for armed 0 for not armed or on alert.
-	int8_t response;
-	if (status.state == alarm::state_armed)
-	{
-		//If the method is arm stay, pir sensors should not work, so send a disarmed response.
-		if (status.method == alarm::method_arm_stay && message.type == sensortypes::type_pir)
-		{
-			response = (uint8_t)alarm::state_disarmed;
-		}
-		else
-		{
-			response = (uint8_t)alarm::state_armed;
-		}
+		handleMessage(message.sensor_id, message.type, message.state);
 	}
 	else
 	{
-		response = (uint8_t)alarm::state_disarmed;
+#ifdef DEBUG
+		Serial.println("Rejected: " + String(message.session_id == m_session_id ? "Valid" : "Invalid") + " session ID, " + String(message.parent_device_id == m_device_id ? "Valid" : "Invalid") + " device ID.");
+#endif
 	}
-	//Send a response with the device's status.
-	m_radio->writeAckPayload(pipe_number, &response, sizeof(response));
-	//Update the sensor info.
-	handleMessage(message.sensor_id, message.type, message.state);
 	return true;
 }
 
@@ -237,6 +244,15 @@ uint8_t sensors::SensorManager::triggeredCount()
 		}
 	}
 	return triggered_count;
+}
+
+// Reset all sensor states. Used when arming or disarming to start with a fresh array.
+void sensors::SensorManager::resetSensorStates()
+{
+	for (uint8_t i = 0; i < max_sensors; i++)
+	{
+		(m_sensors + i)->state = sensortypes::state_ping;
+	}
 }
 
 // Checks for offline sensors and returns the first offline sensor id found
@@ -344,7 +360,7 @@ bool sensors::SensorManager::handleMessage(uint8_t sensor_id, sensortypes::senso
 //Returns true for an array that has the space to add sensors
 bool sensors::SensorManager::canAddSensor()
 {
-	return (m_magnet_counter + m_pir_counter) < max_sensors;
+	return m_data->readRegisteredSensorCount() < max_sensors;
 }
 
 //Registers a new sensor by addings it into the sensor array, if the array is not full.

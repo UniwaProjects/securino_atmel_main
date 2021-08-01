@@ -41,7 +41,6 @@ namespace sensors
 	//Management constants
 	const uint16_t connection_timeout = 30000; //Millis for sensor to communicate
 	const uint8_t max_sensors = 6;			   //Max number of sensors in the network
-	const uint8_t response_wrong_device = 2;
 	const uint16_t waiting_timeout_secs = 60;
 	//I2C constants
 	const int i2c_address = 8;
@@ -55,6 +54,7 @@ namespace sensors
 		static SensorManager *getInstance();
 		void init(uint8_t ce_pin, uint8_t csn_pin, uint32_t device_id);
 		void clearSensorArray();
+		void resetSensorStates();
 		void newSession();
 		bool canAddSensor();
 		bool pair();
@@ -68,6 +68,7 @@ namespace sensors
 	private:
 		//Methods
 		SensorManager();
+		sensortypes::SensorAck createAck(const alarm::Status &status);
 		bool handleMessage(uint8_t sensor_id, sensortypes::sensor_type_t type, sensortypes::sensor_state_t state);
 		bool registerSensor(uint8_t sensor_id, sensortypes::sensor_type_t type);
 		void increaseCounterOfType(sensortypes::sensor_type_t type);
